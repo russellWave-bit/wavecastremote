@@ -1,0 +1,62 @@
+name: Build WaveCastRemote
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the files
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Look for the zip
+        id: z
+        run: |
+          if ls *.zip >/dev/null 2>&1; then echo "found=yes" >> "$GITHUB_OUTPUT"; else echo "found=no" >> "$GITHUB_OUTPUT"; echo "No zip in the repo yet. Upload WaveCastRemote.zip and this will build."; fi
+
+      - name: Set up Java 17
+        if: steps.z.outputs.found == 'yes'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Accept Android licences
+        if: steps.z.outputs.found == 'yes'
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Set up Gradle
+        if: steps.z.outputs.found == 'yes'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Build the app
+        if: steps.z.outputs.found == 'yes'
+        run: |
+          # unpack oldest zip first, newest last, so the newest files always win
+          rm -rf WaveCastRemote
+          for f in *.zip; do echo "$(git log -1 --format=%ct -- "$f") $f"; done | sort -n | while IFS= read -r line; do
+            z="${line#* }"; echo "unpacking $z"; unzip -q -o "$z"
+          done
+          mkdir -p out
+          if [ -f settings.gradle.kts ]; then d=.; else d=WaveCastRemote; fi
+          (cd "$d" && gradle assembleDebug --no-daemon --stacktrace)
+          cp "$d/app/build/outputs/apk/debug/app-debug.apk" out/WaveCastRemote.apk
+          ls -la out
+
+      - name: Publish a release
+        if: steps.z.outputs.found == 'yes'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: WaveCastRemote build ${{ github.run_number }}
+          files: out/WaveCastRemote.apk
